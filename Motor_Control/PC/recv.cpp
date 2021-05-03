@@ -21,9 +21,9 @@ public:
 	float acc[3];		// Acceleration of IMU, unit m/s^2
 	float gyr[3];		// Gyroscope, unit rad/s
 	float mag[3];		// Magnetometer, unit 
-	float eular[3];
+	float euler[3];
 	float timestamps;
-	MSGPACK_DEFINE(joint_pos, joint_vel, joint_cur, acc, gyr, mag, eular, timestamps);
+	MSGPACK_DEFINE(joint_pos, joint_vel, joint_cur, acc, gyr, mag, euler, timestamps);
 };
 
 void main()
@@ -85,9 +85,9 @@ void main()
 		file << recv[0].acc[0] << "\t" << recv[0].acc[1] << "\t" << recv[0].acc[2] << "\t";
 		file << recv[0].gyr[0] << "\t" << recv[0].gyr[1] << "\t" << recv[0].gyr[2] << "\t";
 		file << recv[0].mag[0] << "\t" << recv[0].mag[1] << "\t" << recv[0].mag[2] << "\t";
-		file << recv[0].eular[0] << "\t" << recv[0].eular[1] << "\t" << recv[0].eular[2] << "\n";
+		file << recv[0].euler[0] << "\t" << recv[0].euler[1] << "\t" << recv[0].euler[2] << "\n";
 		*/
-		printf("%f\t%f\t%f\n", recv.eular[0], recv.eular[1], recv.eular[2]);
+		printf("%f\t%f\t%f\n", recv.euler[0], recv.euler[1], recv.euler[2]);
 		//printf("%f\n", recv[0].timestamps);
 	}
 	// Close file

@@ -1,7 +1,6 @@
 #include <FlexCAN_T4.h>
-#include <Adafruit_LSM6DSOX.h>
-#include <Adafruit_LIS3MDL.h>
 #include "MadgwickAHRS.h"
+#include "MPU9250.h"
 #include "Teensy.h"
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> CAN_F; // CAN bus for upper body motors
@@ -51,51 +50,92 @@ bool joint_can_lane [MOTOR_NUM] = { 0,0,0,0,0,0,
 uint16_t joint_can_addr[MOTOR_NUM] = {0x141, 0x142, 0x143, 0144, 0x145, 0x146, 
                                       0x141, 0x142, 0x143, 0144, 0x145, 0x146};
 /****************** IMU ***************************************/
-Adafruit_LSM6DS sox;
-Adafruit_LIS3MDL lis;
+MPU9250 IMU(Wire,0x68);
 
-sensors_event_t accel;
-sensors_event_t gyro;
-sensors_event_t temp;
-sensors_event_t mage;
+float gyro_x_offset = 0.0;
+float gyro_y_offset = 0.0;
+float gyro_z_offset = 0.0;
 
-const float magn_ellipsoid_center[3] = {0.262689, -6.89484, 4.0776};
-const float magn_ellipsoid_transform[3][3] = {{0.899993, 0.0341615, -0.000181209}, {0.0341615, 0.988324, -0.000514259}, { -0.000181209, -0.000514259, 0.952566}};
+float K[3][3] = {{0.9991416, 0.0, 0.0}, {0.0, 0.9949671162, 0.0}, {0.0, 0.0, 0.98455696}};
+float bias[3] = {0.1909475, 0.10116055, -0.2328835};
+
+const float magn_ellipsoid_center[3] = {4.23218, -7.60568, -18.7859};
+const float magn_ellipsoid_transform[3][3] = {{0.880559, -0.00714649, 0.00976959}, {-0.00714649, 0.995225, -0.0131647}, {0.00976959, -0.0131647, 0.955716}};
+
+float accel[3];  // Actually stores the NEGATED acceleration (equals gravity, if board not moving).
+float accel_b[3];
+float magnetom[3];
+float magnetom_tmp[3];
+float gyro[3];
 
 Quaternion qua;
 EulerAngles eul;
 
 void read_sensors() {
-  sox.getEvent(&accel, &gyro, &temp);
-  lis.getEvent(&mage);
-  acc[0] = accel.acceleration.x;
-  acc[1] = accel.acceleration.y;
-  acc[2] = accel.acceleration.z;
+  IMU.readSensor();
+  accel[0] = IMU.getAccelX_mss();
+  accel[1] = IMU.getAccelY_mss();
+  accel[2] = IMU.getAccelZ_mss();
 
-  mag[0] = mage.magnetic.x;
-  mag[1] = mage.magnetic.y;
-  mag[2] = mage.magnetic.z;
+  magnetom[0] = IMU.getMagX_uT();
+  magnetom[1] = IMU.getMagY_uT();
+  magnetom[2] = IMU.getMagZ_uT();
 
-  gyr[0] = gyro.gyro.x;
-  gyr[1] = gyro.gyro.y;
-  gyr[2] = gyro.gyro.z;
+  gyro[0] = IMU.getGyroX_rads();
+  gyro[1] = IMU.getGyroY_rads();
+  gyro[2] = IMU.getGyroZ_rads();
 }
 
+void sensor_init() {
+  for (int i = 0; i < GYRO_CALIBRATION_LOOP_NUM; ++i) {
+    IMU.readSensor();
+    gyro_x_offset += IMU.getGyroX_rads();
+    gyro_y_offset += IMU.getGyroY_rads();
+    gyro_z_offset += IMU.getGyroZ_rads();
+  }
+  gyro_x_offset /= GYRO_CALIBRATION_LOOP_NUM;
+  gyro_y_offset /= GYRO_CALIBRATION_LOOP_NUM;
+  gyro_z_offset /= GYRO_CALIBRATION_LOOP_NUM;
+
+
+  read_sensors();
+  compensate_sensor_errors();
+  
+  time_now = (float)micros();
+  delta_t = (time_now - time_former) / 1000000.0;
+  time_former = time_now;
+
+  MadgwickQuaternionUpdate(accel[0], accel[1], accel[2],
+                           gyro[0], gyro[1], gyro[2],
+                           magnetom[0], magnetom[1], magnetom[2], delta_t);
+  qua.w = q[0];
+  qua.x = q[1];
+  qua.y = q[2];
+  qua.z = q[3];
+  eul = ToEulerAngles(qua);
+  eul.yaw_e += 0.22; // 0.22 rad is the Magnetic Declination in New York
+  if (eul.yaw_e > PI) {
+    eul.yaw_e -= 2 * PI;
+  }
+}
+
+// Apply calibration to raw sensor readings
 void compensate_sensor_errors() {
-  // Compensate accelerometer error
-  acc[0] -= ACCEL_X_OFFSET;
-  acc[1] -= ACCEL_Y_OFFSET;
-  acc[2] -= ACCEL_Z_OFFSET - GRAVITY;
+    // Compensate accelerometer error
+    accel_b[0] = accel[0] - bias[0];
+    accel_b[1] = accel[1] - bias[1];
+    accel_b[2] = accel[2] - bias[2];
+    Matrix_Vector_Multiply(K, accel_b, accel);   
+    
+    // Compensate magnetometer error
+    for (int i = 0; i < 3; i++)
+      magnetom_tmp[i] = magnetom[i] - magn_ellipsoid_center[i];
+    Matrix_Vector_Multiply(magn_ellipsoid_transform, magnetom_tmp, magnetom);
 
-  // Compensate magnetometer error
-  for (int i = 0; i < 3; i++)
-    mag_tmp[i] = mag[i] - magn_ellipsoid_center[i];
-  Matrix_Vector_Multiply(magn_ellipsoid_transform, mag_tmp, mag);
-
-  // Compensate gyroscope error
-  gyr[0] -= GYRO_X_OFFSET;
-  gyr[1] -= GYRO_Y_OFFSET;
-  gyr[2] -= GYRO_Z_OFFSET;
+    // Compensate gyroscope error
+    gyro[0] -= gyro_x_offset;
+    gyro[1] -= gyro_y_offset;
+    gyro[2] -= gyro_z_offset;
 }
 /*********************************************************/
 
@@ -234,22 +274,22 @@ void Jetson_Teensy () {
 
     // Read data from IMU(MPU9250)
    // Save acceleration (m/s^2) of IMU into struct teensy_comm
-    teensy_comm.acc[0] = accel.acceleration.x;
-    teensy_comm.acc[1] = accel.acceleration.y;
-    teensy_comm.acc[2] = accel.acceleration.z;
+    teensy_comm.acc[0] = accel[0];
+    teensy_comm.acc[1] = accel[1];
+    teensy_comm.acc[2] = accel[2];
 
     // Save gyroscope (rad/s) of IMU into struct teensy_comm
-    teensy_comm.gyr[0] = gyro.gyro.x / 180.0 * PI;
-    teensy_comm.gyr[1] = gyro.gyro.y / 180.0 * PI;
-    teensy_comm.gyr[2] = gyro.gyro.z / 180.0 * PI;
+    teensy_comm.gyr[0] = gyro[0] / 180.0 * PI;
+    teensy_comm.gyr[1] = gyro[1] / 180.0 * PI;
+    teensy_comm.gyr[2] = gyro[2] / 180.0 * PI;
 
-    teensy_comm.mag[0] = mage.magnetic.x;
-    teensy_comm.mag[1] = mage.magnetic.y;
-    teensy_comm.mag[2] = mage.magnetic.z;
+    teensy_comm.mag[0] = magnetom[0];
+    teensy_comm.mag[1] = magnetom[1];
+    teensy_comm.mag[2] = magnetom[2];
 
-    teensy_comm.eular[0] = eul.roll_e;
-    teensy_comm.eular[1] = eul.pitch_e;
-    teensy_comm.eular[2] = eul.yaw_e;
+    teensy_comm.euler[0] = eul.roll_e;
+    teensy_comm.euler[1] = eul.pitch_e;
+    teensy_comm.euler[2] = eul.yaw_e;
 
     teensy_comm.timestamps = time_now / 1000000.0;
     // Send data structure teensy_comm to Jetson
@@ -267,21 +307,24 @@ void setup() {
   Serial.begin(USB_UART_SPEED);
   delay(1000);
 
-  // sox stands for Adafruit_LSM6DSOX, a 6 DoF IMU contains accelerometer and gyroscope
-  sox.begin_I2C();
-  sox.setAccelRange(LSM6DS_ACCEL_RANGE_4_G);
-  sox.setGyroRange(LSM6DS_GYRO_RANGE_250_DPS );
-  sox.setAccelDataRate(LSM6DS_RATE_104_HZ);
-  sox.setGyroDataRate(LSM6DS_RATE_104_HZ);
+  pinMode(13, OUTPUT);  
+  digitalWrite(13, HIGH);
+  Serial.begin(1000000);
+  while (!Serial) yield();
 
-  // lis stands for megnatometer Adafruit_LIS3MDL
-  lis.begin_I2C();          // hardware I2C mode, can pass in address & alt Wire
-  lis.setPerformanceMode(LIS3MDL_MEDIUMMODE);
-  lis.setOperationMode(LIS3MDL_CONTINUOUSMODE);
-  lis.setDataRate(LIS3MDL_DATARATE_155_HZ);
-  lis.setRange(LIS3MDL_RANGE_4_GAUSS);
-  //lis.setIntThreshold(500);
-  lis.configInterrupt(false, false, true, true, false, true); // enabled!
+  IMU.begin();
+
+  // setting the accelerometer full scale range to +/-8G 
+  IMU.setAccelRange(MPU9250::ACCEL_RANGE_4G);
+  // setting the gyroscope full scale range to +/-500 deg/s
+  IMU.setGyroRange(MPU9250::GYRO_RANGE_500DPS);
+  // setting DLPF bandwidth to 41 Hz
+  IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_41HZ);
+  // setting SRD to 19 for a 50 Hz update rate
+  IMU.setSrd(9);
+  
+  sensor_init();
+  digitalWrite(13, LOW);
   
   CAN_F.begin();
   CAN_F.setBaudRate(1000000);
@@ -299,15 +342,18 @@ void setup() {
 void loop() {
 
   read_sensors();
-
+  
+  Jetson_Teensy ();
+  
   compensate_sensor_errors();
+  
   time_now = (float)micros();
   delta_t = (time_now - time_former) / 1000000.0;
   time_former = time_now;
 
-  MadgwickQuaternionUpdate(acc[0], acc[1], acc[2],
-                         gyr[0], gyr[1], gyr[2],
-                         mag[0], mag[1], mag[2], delta_t);
+  MadgwickQuaternionUpdate(accel[0], accel[1], accel[2],
+                           gyro[0], gyro[1], gyro[2],
+                           magnetom[0], magnetom[1], magnetom[2], delta_t);
   qua.w = q[0];
   qua.x = q[1];
   qua.y = q[2];
@@ -318,8 +364,6 @@ void loop() {
     eul.yaw_e -= 2 * PI;
   }
   
-  Jetson_Teensy ();
-
   for (int i = 0; i < MOTOR_NUM; ++i) {
     joint_pos_desired[i] = jetson_comm.comd[i];
     if (joint_pos_desired[i] > joint_upper_limit[i])

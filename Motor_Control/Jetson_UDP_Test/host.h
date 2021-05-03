@@ -29,7 +29,7 @@ typedef struct {
   float    acc[3];						  // Acceleration in X Y Z direction, m/s^2
   float    gyr[3];						  // Gyroscope in X Y Z direction, deg/s
   float    mag[3];             // Magnetometer in X Y Z, uT
-  float    eular[3];
+  float    euler[3];
   float    timestamps;
 } Teensycomm_struct_t;
 

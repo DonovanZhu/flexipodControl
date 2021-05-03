@@ -57,9 +57,9 @@ public:
 	float acc[3];				// Acceleration of IMU, unit m/s^2
 	float gyr[3];				// Gyroscope, unit deg/s
 	float mag[3];
-	float eular[3];
+	float euler[3];
 	float timestamps;
-	MSGPACK_DEFINE(joint_pos, joint_vel, torque, comd, acc, gyr, mag, eular, timestamps);
+	MSGPACK_DEFINE(joint_pos, joint_vel, torque, comd, acc, gyr, mag, euler, timestamps);
 };
 
 // set a object for sending UDP through msgpack
@@ -156,8 +156,8 @@ int main( ) {
 			
 			SendMotorData.mag[i] = comm -> mag[i];
 			
-			SendMotorData.eular[i] = comm -> eular[i];
-			printf("%f\t", SendMotorData.eular[i]);
+			SendMotorData.euler[i] = comm -> euler[i];
+			printf("%f\t", SendMotorData.euler[i]);
 		}
 		printf("\n");
 		
