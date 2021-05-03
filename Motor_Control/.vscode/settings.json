@@ -1,0 +1,19 @@
+{
+    "files.associations": {
+        "xutility": "cpp",
+        "chrono": "cpp",
+        "deque": "cpp",
+        "exception": "cpp",
+        "fstream": "cpp",
+        "iosfwd": "cpp",
+        "streambuf": "cpp",
+        "vector": "cpp",
+        "xhash": "cpp",
+        "xlocale": "cpp",
+        "xlocmon": "cpp",
+        "xlocnum": "cpp",
+        "xloctime": "cpp",
+        "xmemory": "cpp",
+        "xstring": "cpp"
+    }
+}
