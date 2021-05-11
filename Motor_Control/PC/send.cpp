@@ -16,13 +16,13 @@
 // Saves us from typing std::cout << etc. etc. etc.
 using namespace std;
 
-class MotorCommand {
+class MsgFromPC {
 public:
 	float robot_command[MOTOR_NMB];
 	MSGPACK_DEFINE(robot_command);
 };
 
-MotorCommand Command;
+MsgFromPC Command;
 
 void main()
 {
@@ -34,13 +34,12 @@ void main()
 
 	sockaddr_in server;
 	server.sin_family = AF_INET; // AF_INET = IPv4 addresses
-	server.sin_port = htons(32001); // 32001 is the port number of the program on  Jetso Nano
-	inet_pton(AF_INET, "10.42.0.1", &server.sin_addr); // 10.42.0.1 is the address of Jetson Nano
+	server.sin_port = htons(32001); // Little to big endian conversion
+	inet_pton(AF_INET, "10.42.0.1", &server.sin_addr); // Convert from string to byte array
 
 	SOCKET out = socket(AF_INET, SOCK_DGRAM, 0);
 
-	float speed_command[MOTOR_NMB] = {0.0, 0.0, 0.0};
-	MotorCommand SendCommand;
+	MsgFromPC SendCommand;
 	
 	int j = 0;
 	for (int i = 0; i < MOTOR_NMB; i++)
