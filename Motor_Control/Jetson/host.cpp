@@ -1,6 +1,8 @@
 /*****************host.cpp******************/
 // compile:
 // sudo g++ -pthread host.cpp
+// autorun: edit etc/rc.local:
+//			add: path_to_a.out &
 // run:
 // ./a.out
 /*******************************************/
