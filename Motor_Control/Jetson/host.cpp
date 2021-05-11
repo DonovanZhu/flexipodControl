@@ -37,7 +37,7 @@ using namespace std;
 
 constexpr int JETSON_PORT = 32001;
 constexpr int PC_PORT = 32000;
-constexpr char PC_IP_ADDR[] = "192.168.137.1";
+constexpr char PC_IP_ADDR[] = "10.42.0.79";
 constexpr int UDP_BUFFER_SIZE = 128;
 
 // Globals
@@ -59,7 +59,7 @@ class MsgToPC
 public:
 	float joint_pos[MOTOR_NUM]; // Rotation angle, unit degree
 	float joint_vel[MOTOR_NUM]; // Rotation speed, unit rad/s
-	float joint_cur[MOTOR_NUM]; // Rotation current, unit N*m
+	float joint_cur[MOTOR_NUM]; // Rotation current, unit A
 	float acc[3];				// Acceleration of IMU, unit m/s^2
 	float gyr[3];				// Gyroscope, unit deg/s
 	float mag[3];
@@ -153,7 +153,7 @@ int main()
 				desired_pos[i] = recv.robot_command[i];
 			}
 		}
-
+		//printf("%f\t", desired_pos[0]);
 		// Serial exchange with teensy
 		if ((ret = Host_comm_update(HOST_DEV_SERIALNB, &comm)))
 		{
@@ -172,7 +172,7 @@ int main()
 			// Current of motors:
 			msg_to_pc.joint_cur[j] = comm->joint_cur[j];
 		}
-		//printf("%f\t", msg_to_pc.timestamps - time_former);
+		
 		time_former = msg_to_pc.timestamps;
 		for (int i = 0; i < 3; ++i)
 		{
@@ -182,7 +182,7 @@ int main()
 			msg_to_pc.euler[i] = comm->euler[i];
 			//printf("%f\t", msg_to_pc.euler[i]);
 		}
-		printf("\n");
+		//printf("\n");
 
 		std::stringstream send_stream;
 		msgpack::pack(send_stream, msg_to_pc);

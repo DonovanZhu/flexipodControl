@@ -1,6 +1,7 @@
 #include <FlexCAN_T4.h>
+#include <Adafruit_LSM6DSOX.h>
+#include <Adafruit_LIS3MDL.h>
 #include "MadgwickAHRS.h"
-#include "MPU9250.h"
 #include "Teensy.h"
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> CAN_F; // CAN bus for upper body motors
@@ -25,10 +26,6 @@ float joint_cur[MOTOR_NUM] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
 
 float joint_upper_limit[MOTOR_NUM] = { 2.4,  1.93,  1.6,  4.7,  1.93,  1.6,  4.7,  1.93,  1.6,  2.4,  1.93,  1.6};
 float joint_lower_limit[MOTOR_NUM] = {-4.7, -1.93, -1.6, -2.4, -1.93, -1.6, -2.4, -1.93, -1.6, -4.7, -1.93, -1.6};
-float acc[3];  // accelerometer data
-float mag[3]; // magnetometer data
-float mag_tmp[3]; // magnetometer temporary data
-float gyr[3]; // gyroscope data
 
 float delta_t; // loop time difference
 Teensycomm_struct_t   teensy_comm = {{}, {}, {}, {}, {}, {}, {}, {}};   // For holding data sent to Jetson
@@ -50,14 +47,20 @@ bool joint_can_lane [MOTOR_NUM] = { 0,0,0,0,0,0,
 uint16_t joint_can_addr[MOTOR_NUM] = {0x141, 0x142, 0x143, 0x144, 0x145, 0x146, 
                                       0x141, 0x142, 0x143, 0x144, 0x145, 0x146};
 /****************** IMU ***************************************/
-MPU9250 IMU(Wire,0x68);
+Adafruit_LSM6DS sox;
+Adafruit_LIS3MDL lis;
+
+sensors_event_t acc;
+sensors_event_t gyr;
+sensors_event_t temp;
+sensors_event_t mag;
 
 float gyro_x_offset = 0.0;
 float gyro_y_offset = 0.0;
 float gyro_z_offset = 0.0;
 
-float K[3][3] = {{0.9991416, 0.0, 0.0}, {0.0, 0.9949671162, 0.0}, {0.0, 0.0, 0.98455696}};
-float bias[3] = {0.1909475, 0.10116055, -0.2328835};
+float acc_transform[3][3] = {{0.9991416, 0.0, 0.0}, {0.0, 0.9949671162, 0.0}, {0.0, 0.0, 0.98455696}};
+float acc_offset[3] = {0.1909475, 0.10116055, -0.2328835};
 
 const float magn_ellipsoid_center[3] = {4.23218, -7.60568, -18.7859};
 const float magn_ellipsoid_transform[3][3] = {{0.880559, -0.00714649, 0.00976959}, {-0.00714649, 0.995225, -0.0131647}, {0.00976959, -0.0131647, 0.955716}};
@@ -72,26 +75,27 @@ Quaternion qua;
 EulerAngles eul;
 
 void read_sensors() {
-  IMU.readSensor();
-  accel[0] = IMU.getAccelX_mss();
-  accel[1] = IMU.getAccelY_mss();
-  accel[2] = IMU.getAccelZ_mss();
+  sox.getEvent(&acc, &gyr, &temp);
+  lis.getEvent(&mag);
+  accel[0] = acc.acceleration.x;
+  accel[1] = acc.acceleration.y;
+  accel[2] = acc.acceleration.z;
 
-  magnetom[0] = IMU.getMagX_uT();
-  magnetom[1] = IMU.getMagY_uT();
-  magnetom[2] = IMU.getMagZ_uT();
+  magnetom[0] = mag.magnetic.x;
+  magnetom[1] = mag.magnetic.y;
+  magnetom[2] = mag.magnetic.z;
 
-  gyro[0] = IMU.getGyroX_rads();
-  gyro[1] = IMU.getGyroY_rads();
-  gyro[2] = IMU.getGyroZ_rads();
+  gyro[0] = gyr.gyro.x;
+  gyro[1] = gyr.gyro.y;
+  gyro[2] = gyr.gyro.z;
 }
 
 void sensor_init() {
   for (int i = 0; i < GYRO_CALIBRATION_LOOP_NUM; ++i) {
-    IMU.readSensor();
-    gyro_x_offset += IMU.getGyroX_rads();
-    gyro_y_offset += IMU.getGyroY_rads();
-    gyro_z_offset += IMU.getGyroZ_rads();
+    sox.getEvent(&acc, &gyr, &temp);
+    gyro_x_offset += gyr.gyro.x;
+    gyro_y_offset += gyr.gyro.y;
+    gyro_z_offset += gyr.gyro.z;
   }
   gyro_x_offset /= GYRO_CALIBRATION_LOOP_NUM;
   gyro_y_offset /= GYRO_CALIBRATION_LOOP_NUM;
@@ -101,10 +105,10 @@ void sensor_init() {
 // Apply calibration to raw sensor readings
 void compensate_sensor_errors() {
     // Compensate accelerometer error
-    accel_b[0] = accel[0] - bias[0];
-    accel_b[1] = accel[1] - bias[1];
-    accel_b[2] = accel[2] - bias[2];
-    Matrix_Vector_Multiply(K, accel_b, accel);   
+    accel_b[0] = accel[0] - acc_offset[0];
+    accel_b[1] = accel[1] - acc_offset[1];
+    accel_b[2] = accel[2] - acc_offset[2];
+    Matrix_Vector_Multiply(acc_transform, accel_b, accel);   
     
     // Compensate magnetometer error
     for (int i = 0; i < 3; i++)
@@ -285,24 +289,27 @@ void setup() {
   // Switch on CAN bus
   Serial.begin(USB_UART_SPEED);
 
-  //pinMode(13, OUTPUT);  
-  //digitalWrite(13, HIGH);
+  pinMode(13, OUTPUT);  
+  digitalWrite(13, HIGH);
 
-/*
-  IMU.begin();
 
-  // setting the accelerometer full scale range to +/-8G 
-  IMU.setAccelRange(MPU9250::ACCEL_RANGE_4G);
-  // setting the gyroscope full scale range to +/-500 deg/s
-  IMU.setGyroRange(MPU9250::GYRO_RANGE_500DPS);
-  // setting DLPF bandwidth to 41 Hz
-  IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_41HZ);
-  // setting SRD to 19 for a 50 Hz update rate
-  IMU.setSrd(9);
+  sox.begin_I2C();
+  sox.setAccelRange(LSM6DS_ACCEL_RANGE_4_G);
+  sox.setGyroRange(LSM6DS_GYRO_RANGE_500_DPS );
+  sox.setAccelDataRate(LSM6DS_RATE_52_HZ);
+  sox.setGyroDataRate(LSM6DS_RATE_52_HZ);
+
+  lis.begin_I2C();          // hardware I2C mode, can pass in address & alt Wire
+  lis.setPerformanceMode(LIS3MDL_MEDIUMMODE);
+  lis.setOperationMode(LIS3MDL_CONTINUOUSMODE);
+  lis.setDataRate(LIS3MDL_DATARATE_40_HZ);
+  lis.setRange(LIS3MDL_RANGE_4_GAUSS);
+  lis.setIntThreshold(500);
+  lis.configInterrupt(false, false, true, true, false, true); // enabled!
   
   sensor_init();
   digitalWrite(13, LOW);
-  */
+
   CAN_F.begin();
   CAN_F.setBaudRate(1000000);
   CAN_F.setClock(CLK_60MHz);
@@ -318,16 +325,16 @@ void setup() {
 
 void loop() {
 
-  //read_sensors();
+  read_sensors();
   
   Jetson_Teensy ();
   
-  //compensate_sensor_errors();
+  compensate_sensor_errors();
   
   time_now = (float)micros();
   delta_t = (time_now - time_former) / 1000000.0;
   time_former = time_now;
-/*
+
   MadgwickQuaternionUpdate(accel[0], accel[1], accel[2],
                            gyro[0], gyro[1], gyro[2],
                            magnetom[0], magnetom[1], magnetom[2], delta_t);
@@ -340,7 +347,7 @@ void loop() {
   if (eul.yaw_e > PI) {
     eul.yaw_e -= 2 * PI;
   }
-  */
+
   
   for (int i = 0; i < MOTOR_NUM; ++i) {
     joint_pos_desired[i] = jetson_comm.comd[i];
