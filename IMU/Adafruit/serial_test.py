@@ -5,7 +5,7 @@ import msgpack
 
 
 def main():
-    port = "COM8"
+    port = "COM4"
     baud_rate = 2000000
     batch_size = 200
     data_arr = np.empty((batch_size,10),dtype=float)
@@ -19,6 +19,8 @@ def main():
         k = 0
         while(1):
             # ser.reset_input_buffer()
+            # while ser.inWaiting():
+            #     raw_data = ser.readall()
             raw_data = ser.readline()
             data = np.asarray(raw_data[:-1].split(b" "),dtype=float)
             data_arr[k%batch_size] = data

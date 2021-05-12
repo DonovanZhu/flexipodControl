@@ -1,4 +1,4 @@
-#include <Adafruit_LSM6DSOX.h>
+#include <Adafruit_LSM6DSOX.h> //ref:https://github.com/adafruit/Adafruit_LSM6DS/blob/master/Adafruit_LSM6DS.h
 #include <Adafruit_LIS3MDL.h>
 #include <Wire.h>
 
@@ -10,8 +10,6 @@ sensors_event_t gyro;
 sensors_event_t mage;
 sensors_event_t temp;
 
-double acc[3] = {0.0, 0.0, 0.0};
-double gyr[3] = {0.0, 0.0, 0.0};
 
 void read_sensors() {
   sox.getEvent(&accel, &gyro, &temp);
