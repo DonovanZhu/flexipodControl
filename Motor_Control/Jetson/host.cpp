@@ -39,7 +39,8 @@ using namespace std;
 
 constexpr int JETSON_PORT = 32001;
 constexpr int PC_PORT = 32000;
-constexpr char PC_IP_ADDR[] = "10.42.0.79";
+constexpr char PC_IP_ADDR[] = "192.168.137.1";
+// constexpr char PC_IP_ADDR[] = "192.168.1.109";
 constexpr int UDP_BUFFER_SIZE = 128;
 
 // Globals

@@ -1,6 +1,7 @@
 #include <FlexCAN_T4.h>
+#include <Adafruit_LSM6DSOX.h>
+#include <Adafruit_LIS3MDL.h>
 #include "MadgwickAHRS.h"
-#include "MPU9250.h"
 #include "Teensy.h"
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> CAN_F; // CAN bus for upper body motors
@@ -25,10 +26,6 @@ float joint_cur[MOTOR_NUM] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
 
 float joint_upper_limit[MOTOR_NUM] = { 2.4,  1.93,  1.6,  4.7,  1.93,  1.6,  4.7,  1.93,  1.6,  2.4,  1.93,  1.6};
 float joint_lower_limit[MOTOR_NUM] = {-4.7, -1.93, -1.6, -2.4, -1.93, -1.6, -2.4, -1.93, -1.6, -4.7, -1.93, -1.6};
-float acc[3];  // accelerometer data
-float mag[3]; // magnetometer data
-float mag_tmp[3]; // magnetometer temporary data
-float gyr[3]; // gyroscope data
 
 float delta_t; // loop time difference
 Teensycomm_struct_t   teensy_comm = {{}, {}, {}, {}, {}, {}, {}, {}};   // For holding data sent to Jetson
@@ -50,14 +47,20 @@ bool joint_can_lane [MOTOR_NUM] = { 0,0,0,0,0,0,
 uint16_t joint_can_addr[MOTOR_NUM] = {0x141, 0x142, 0x143, 0x144, 0x145, 0x146, 
                                       0x141, 0x142, 0x143, 0x144, 0x145, 0x146};
 /****************** IMU ***************************************/
-MPU9250 IMU(Wire,0x68);
+Adafruit_LSM6DS sox;
+Adafruit_LIS3MDL lis;
+
+sensors_event_t acc;
+sensors_event_t gyr;
+sensors_event_t temp;
+sensors_event_t mag;
 
 float gyro_x_offset = 0.0;
 float gyro_y_offset = 0.0;
 float gyro_z_offset = 0.0;
 
-float K[3][3] = {{0.9991416, 0.0, 0.0}, {0.0, 0.9949671162, 0.0}, {0.0, 0.0, 0.98455696}};
-float bias[3] = {0.1909475, 0.10116055, -0.2328835};
+float acc_transform[3][3] = {{0.9991416, 0.0, 0.0}, {0.0, 0.9949671162, 0.0}, {0.0, 0.0, 0.98455696}};
+float acc_offset[3] = {0.1909475, 0.10116055, -0.2328835};
 
 const float magn_ellipsoid_center[3] = {4.23218, -7.60568, -18.7859};
 const float magn_ellipsoid_transform[3][3] = {{0.880559, -0.00714649, 0.00976959}, {-0.00714649, 0.995225, -0.0131647}, {0.00976959, -0.0131647, 0.955716}};
@@ -72,26 +75,27 @@ Quaternion qua;
 EulerAngles eul;
 
 void read_sensors() {
-  IMU.readSensor();
-  accel[0] = IMU.getAccelX_mss();
-  accel[1] = IMU.getAccelY_mss();
-  accel[2] = IMU.getAccelZ_mss();
+  sox.getEvent(&acc, &gyr, &temp);
+  lis.getEvent(&mag);
+  accel[0] = acc.acceleration.x;
+  accel[1] = acc.acceleration.y;
+  accel[2] = acc.acceleration.z;
 
-  magnetom[0] = IMU.getMagX_uT();
-  magnetom[1] = IMU.getMagY_uT();
-  magnetom[2] = IMU.getMagZ_uT();
+  magnetom[0] = mag.magnetic.x;
+  magnetom[1] = mag.magnetic.y;
+  magnetom[2] = mag.magnetic.z;
 
-  gyro[0] = IMU.getGyroX_rads();
-  gyro[1] = IMU.getGyroY_rads();
-  gyro[2] = IMU.getGyroZ_rads();
+  gyro[0] = gyr.gyro.x;
+  gyro[1] = gyr.gyro.y;
+  gyro[2] = gyr.gyro.z;
 }
 
 void sensor_init() {
   for (int i = 0; i < GYRO_CALIBRATION_LOOP_NUM; ++i) {
-    IMU.readSensor();
-    gyro_x_offset += IMU.getGyroX_rads();
-    gyro_y_offset += IMU.getGyroY_rads();
-    gyro_z_offset += IMU.getGyroZ_rads();
+    sox.getEvent(&acc, &gyr, &temp);
+    gyro_x_offset += gyr.gyro.x;
+    gyro_y_offset += gyr.gyro.y;
+    gyro_z_offset += gyr.gyro.z;
   }
   gyro_x_offset /= GYRO_CALIBRATION_LOOP_NUM;
   gyro_y_offset /= GYRO_CALIBRATION_LOOP_NUM;
@@ -101,10 +105,10 @@ void sensor_init() {
 // Apply calibration to raw sensor readings
 void compensate_sensor_errors() {
     // Compensate accelerometer error
-    accel_b[0] = accel[0] - bias[0];
-    accel_b[1] = accel[1] - bias[1];
-    accel_b[2] = accel[2] - bias[2];
-    Matrix_Vector_Multiply(K, accel_b, accel);   
+    accel_b[0] = accel[0] - acc_offset[0];
+    accel_b[1] = accel[1] - acc_offset[1];
+    accel_b[2] = accel[2] - acc_offset[2];
+    Matrix_Vector_Multiply(acc_transform, accel_b, accel);   
     
     // Compensate magnetometer error
     for (int i = 0; i < 3; i++)
@@ -146,8 +150,9 @@ void processMotorData(int id) {
   // Receiving motor angle
   // Transfer hex number to rad
   int rotor_pos_raw = 0; // Rotor position before devided by gear reduction
-  rotor_pos_raw |= (int16_t)(unsigned char)msg_recv.buf[7] << 8; // Left move 8 bit
-  rotor_pos_raw |= (int16_t)(unsigned char)msg_recv.buf[6];
+  *(uint8_t *)(&rotor_pos_raw) = msg_recv.buf[6];
+  *((uint8_t *)(&rotor_pos_raw)+1) = msg_recv.buf[7];
+
   rotor_pos[id] = (float)rotor_pos_raw / 65535.0 * 2 * PI; // 65535(0xFFFF) refers to 2PI
   if (rotor_pos[id] - rotor_pos_prev[id] < -PI)
     r_num[id] += 1;
@@ -160,22 +165,14 @@ void processMotorData(int id) {
 
   // Calculate shaft velocity [rad/s]
   int rotor_vel_raw = 0;
-  rotor_vel_raw |= (int16_t)(unsigned char)msg_recv.buf[5] << 8;
-  rotor_vel_raw |= (int16_t)(unsigned char)msg_recv.buf[4];
-
-  // 0x0001 to 0x8000 counter-clockwise, 0x8000: max counter-clockwise speed
-  // 0x8001 to 0xffff clockwise, 0x8001: max clockwise speed
-  // 0x0000 refers to stop
-  if (rotor_vel_raw > 0x8000)
-    rotor_vel_raw -= 0x10000;
+  *(uint8_t *)(&rotor_vel_raw) = msg_recv.buf[4];
+  *((uint8_t *)(&rotor_vel_raw)+1) = msg_recv.buf[5];
   joint_vel[id] = (float)rotor_vel_raw * PI / (180.0 * REDUCTION_RATIO);
 
   // Calculate motor's current [A], -33A ~ 33A
   int cur_raw = 0;
-  cur_raw |= (int16_t)(unsigned char)msg_recv.buf[3] << 8;
-  cur_raw |= (int16_t)(unsigned char)msg_recv.buf[2];
-  if (cur_raw > 0x8000)
-    cur_raw -= 0x10000;
+  *(uint8_t *)(&cur_raw) = msg_recv.buf[2];
+  *((uint8_t *)(&cur_raw)+1) = msg_recv.buf[3];
   joint_cur[id] = (float)cur_raw * 33.0 / 2048.0; // 2048 refers to 33A
 }
 
@@ -189,13 +186,13 @@ void Angle_Control_Loop(int motor_id, float pos_command) {
   // 0x00000001 - 0x80000000 counter_clockwise
   // 0x80000001 - 0xffffffff clockwise
   // 0x00000000 position 0
-  if (pos < 0)
-    pos = 0x100000000 + pos;
+  // if (pos < 0)
+  //   pos = 0x100000000 + pos;
 
-  unsigned int pos_1 = pos & 0xff;
-  unsigned int pos_2 = (pos >> 8) & 0xff;
-  unsigned int pos_3 = (pos >> 16) & 0xff;
-  unsigned int pos_4 = (pos >> 24) & 0xff;
+  // unsigned int pos_1 = pos & 0xff;
+  // unsigned int pos_2 = (pos >> 8) & 0xff;
+  // unsigned int pos_3 = (pos >> 16) & 0xff;
+  // unsigned int pos_4 = (pos >> 24) & 0xff;
 
   // Set the CAN message ID as 0x200
   msg_send.id = joint_can_addr[motor_id];
@@ -203,10 +200,10 @@ void Angle_Control_Loop(int motor_id, float pos_command) {
   msg_send.buf[1] = 0x00;
   msg_send.buf[2] = 0x00;
   msg_send.buf[3] = 0x00;
-  msg_send.buf[4] = pos_1;
-  msg_send.buf[5] = pos_2;
-  msg_send.buf[6] = pos_3;
-  msg_send.buf[7] = pos_4;
+  msg_send.buf[4] = *(uint8_t*)(&pos);
+  msg_send.buf[5] = *((uint8_t*)(&pos)+1);
+  msg_send.buf[6] = *((uint8_t*)(&pos)+2);;
+  msg_send.buf[7] = *((uint8_t*)(&pos)+3);;
 
 
   if (joint_can_lane[motor_id]==0) {
@@ -285,24 +282,27 @@ void setup() {
   // Switch on CAN bus
   Serial.begin(USB_UART_SPEED);
 
-  //pinMode(13, OUTPUT);  
-  //digitalWrite(13, HIGH);
+  pinMode(13, OUTPUT);  
+  digitalWrite(13, HIGH);
 
-/*
-  IMU.begin();
 
-  // setting the accelerometer full scale range to +/-8G 
-  IMU.setAccelRange(MPU9250::ACCEL_RANGE_4G);
-  // setting the gyroscope full scale range to +/-500 deg/s
-  IMU.setGyroRange(MPU9250::GYRO_RANGE_500DPS);
-  // setting DLPF bandwidth to 41 Hz
-  IMU.setDlpfBandwidth(MPU9250::DLPF_BANDWIDTH_41HZ);
-  // setting SRD to 19 for a 50 Hz update rate
-  IMU.setSrd(9);
+  sox.begin_I2C();
+  sox.setAccelRange(LSM6DS_ACCEL_RANGE_4_G);
+  sox.setGyroRange(LSM6DS_GYRO_RANGE_500_DPS );
+  sox.setAccelDataRate(LSM6DS_RATE_52_HZ);
+  sox.setGyroDataRate(LSM6DS_RATE_52_HZ);
+
+  lis.begin_I2C();          // hardware I2C mode, can pass in address & alt Wire
+  lis.setPerformanceMode(LIS3MDL_MEDIUMMODE);
+  lis.setOperationMode(LIS3MDL_CONTINUOUSMODE);
+  lis.setDataRate(LIS3MDL_DATARATE_40_HZ);
+  lis.setRange(LIS3MDL_RANGE_4_GAUSS);
+  lis.setIntThreshold(500);
+  lis.configInterrupt(false, false, true, true, false, true); // enabled!
   
   sensor_init();
   digitalWrite(13, LOW);
-  */
+
   CAN_F.begin();
   CAN_F.setBaudRate(1000000);
   CAN_F.setClock(CLK_60MHz);
@@ -318,16 +318,16 @@ void setup() {
 
 void loop() {
 
-  //read_sensors();
+  read_sensors();
   
   Jetson_Teensy ();
   
-  //compensate_sensor_errors();
+  compensate_sensor_errors();
   
   time_now = (float)micros();
   delta_t = (time_now - time_former) / 1000000.0;
   time_former = time_now;
-/*
+
   MadgwickQuaternionUpdate(accel[0], accel[1], accel[2],
                            gyro[0], gyro[1], gyro[2],
                            magnetom[0], magnetom[1], magnetom[2], delta_t);
@@ -340,7 +340,7 @@ void loop() {
   if (eul.yaw_e > PI) {
     eul.yaw_e -= 2 * PI;
   }
-  */
+
   
   for (int i = 0; i < MOTOR_NUM; ++i) {
     joint_pos_desired[i] = jetson_comm.comd[i];
