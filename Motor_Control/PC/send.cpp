@@ -35,7 +35,8 @@ void main()
 	sockaddr_in server;
 	server.sin_family = AF_INET; // AF_INET = IPv4 addresses
 	server.sin_port = htons(32001); // Little to big endian conversion
-	inet_pton(AF_INET, "10.42.0.1", &server.sin_addr); // Convert from string to byte array
+	inet_pton(AF_INET, "192.168.137.7", &server.sin_addr); // Convert from string to byte array
+	//inet_pton(AF_INET, "192.168.1.96", &server.sin_addr); // Convert from string to byte array
 
 	SOCKET out = socket(AF_INET, SOCK_DGRAM, 0);
 
