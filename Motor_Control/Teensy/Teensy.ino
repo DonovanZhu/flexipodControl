@@ -1,7 +1,7 @@
-#include <FlexCAN_T4.h>
-#include <Adafruit_LSM6DSOX.h>
-#include <Adafruit_LIS3MDL.h>
-#include "MadgwickAHRS.h"
+#include <FlexCAN_T4.h>          // CAN bus library for Teensy4.0
+#include <Adafruit_LSM6DSOX.h>   // Accelerometer and gyroscope library
+#include <Adafruit_LIS3MDL.h>    // Megnatometer library
+#include "MadgwickAHRS.h"        // Madgwick filter library
 #include "Teensy.h"
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> CAN_F; // CAN bus for upper body motors
@@ -10,12 +10,12 @@ FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_16> CAN_B; // CAN bus for lower body motor
 
 // Globals
 float joint_pos_desired[MOTOR_NUM]  = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};   // desired joint(motor) position [rad]
-float rotor_pos[MOTOR_NUM];
-float rotor_pos_prev[MOTOR_NUM];
-int   r_num[MOTOR_NUM] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+float rotor_pos[MOTOR_NUM]; // rotor position [rad]
+float rotor_pos_prev[MOTOR_NUM]; // former timestamp rotor position [rad]
+int   r_num[MOTOR_NUM] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // number of revolution of rotor
 
-float time_now;
-float time_former;
+float time_now; // timestamp of the present loop [s]
+float time_former; // timestamp of former loop [s]
 
 // Motor shaft position [rad]
 float joint_pos[MOTOR_NUM] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -24,7 +24,10 @@ float joint_vel[MOTOR_NUM] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
 // Motor current [A]
 float joint_cur[MOTOR_NUM] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
+// Motor upper limit from motor 1 to 12 [rad]
 float joint_upper_limit[MOTOR_NUM] = { 2.4,  1.93,  1.6,  4.7,  1.93,  1.6,  4.7,  1.93,  1.6,  2.4,  1.93,  1.6};
+
+// Motor lower limit from motor 1 to 12 [rad]
 float joint_lower_limit[MOTOR_NUM] = {-4.7, -1.93, -1.6, -2.4, -1.93, -1.6, -2.4, -1.93, -1.6, -4.7, -1.93, -1.6};
 
 float delta_t; // loop time difference
@@ -47,33 +50,43 @@ bool joint_can_lane [MOTOR_NUM] = { 0,0,0,0,0,0,
 uint16_t joint_can_addr[MOTOR_NUM] = {0x141, 0x142, 0x143, 0x144, 0x145, 0x146, 
                                       0x141, 0x142, 0x143, 0x144, 0x145, 0x146};
 /****************** IMU ***************************************/
-Adafruit_LSM6DS sox;
-Adafruit_LIS3MDL lis;
+Adafruit_LSM6DS sox; // Accelerometer and gyroscope
+Adafruit_LIS3MDL lis;// Magnetometer
 
-sensors_event_t acc;
-sensors_event_t gyr;
-sensors_event_t temp;
-sensors_event_t mag;
+sensors_event_t acc; // accelerameter
+sensors_event_t gyr; // gyroscope
+sensors_event_t temp;// thermometer
+sensors_event_t mag; // magnetometer
 
 float gyro_x_offset = 0.0;
 float gyro_y_offset = 0.0;
 float gyro_z_offset = 0.0;
 
+// To calibrate Accelerometer and Magnetometer: C = T * (R - B)
+// C: calibrated data; T: calibration matrix; R: raw data; B: bias
+// Accelerometer calibration matrix
 float acc_transform[3][3] = {{0.9991416, 0.0, 0.0}, {0.0, 0.9949671162, 0.0}, {0.0, 0.0, 0.98455696}};
+
+// Accelerometer bias
 float acc_offset[3] = {0.1909475, 0.10116055, -0.2328835};
 
+// Magnetometer calibration matrix
 const float magn_ellipsoid_center[3] = {4.23218, -7.60568, -18.7859};
+
+// Magnetometer bias
 const float magn_ellipsoid_transform[3][3] = {{0.880559, -0.00714649, 0.00976959}, {-0.00714649, 0.995225, -0.0131647}, {0.00976959, -0.0131647, 0.955716}};
 
 float accel[3];  // Actually stores the NEGATED acceleration (equals gravity, if board not moving).
-float accel_b[3];
-float magnetom[3];
-float magnetom_tmp[3];
-float gyro[3];
+float accel_b[3];// Acceleration without bias
+float magnetom[3];// magnetic field
+float magnetom_tmp[3];// temperary magnetic field
+float gyro[3];// IMU rotation speed
 
-Quaternion qua;
-EulerAngles eul;
+Quaternion qua; //quaternion struct
+EulerAngles eul;// euler anglr struct
 
+
+// Read data from IMU
 void read_sensors() {
   sox.getEvent(&acc, &gyr, &temp);
   lis.getEvent(&mag);
@@ -90,6 +103,9 @@ void read_sensors() {
   gyro[2] = gyr.gyro.z;
 }
 
+
+// Initialize gyroscope
+// Loop for GYRO_CALIBRATION_LOOP_NUM times and calculate average data
 void sensor_init() {
   for (int i = 0; i < GYRO_CALIBRATION_LOOP_NUM; ++i) {
     sox.getEvent(&acc, &gyr, &temp);
@@ -282,10 +298,11 @@ void setup() {
   // Switch on CAN bus
   Serial.begin(USB_UART_SPEED);
 
+  // Turn on the LED on Teensy to indicate IMU is initializing
   pinMode(13, OUTPUT);  
   digitalWrite(13, HIGH);
 
-
+  // Initialize IMU
   sox.begin_I2C();
   sox.setAccelRange(LSM6DS_ACCEL_RANGE_4_G);
   sox.setGyroRange(LSM6DS_GYRO_RANGE_500_DPS );
@@ -301,8 +318,11 @@ void setup() {
   lis.configInterrupt(false, false, true, true, false, true); // enabled!
   
   sensor_init();
+
+  // Turn off LED to indicate IMU initialization is done
   digitalWrite(13, LOW);
 
+  // Initialize CAN bus
   CAN_F.begin();
   CAN_F.setBaudRate(1000000);
   CAN_F.setClock(CLK_60MHz);
@@ -310,7 +330,8 @@ void setup() {
   CAN_B.begin();
   CAN_B.setBaudRate(1000000);
   CAN_B.setClock(CLK_60MHz);
-  // Open Serial port in speed 1000000 Baudrate
+  
+  // Set motors to 0 rad
   Motor_Init();
   
   time_former = (float)micros();
@@ -328,20 +349,30 @@ void loop() {
   delta_t = (time_now - time_former) / 1000000.0;
   time_former = time_now;
 
+  // Madgwick filer
+  // Input: acceleration, rotation speed, magnetic field, time difference
+  // Output: quternion "q"
   MadgwickQuaternionUpdate(accel[0], accel[1], accel[2],
                            gyro[0], gyro[1], gyro[2],
                            magnetom[0], magnetom[1], magnetom[2], delta_t);
+
+
+  // Save quaternion into a struct
   qua.w = q[0];
   qua.x = q[1];
   qua.y = q[2];
   qua.z = q[3];
+
+  // Transfer quaternion to Euler angle
   eul = ToEulerAngles(qua);
   eul.yaw_e += 0.22; // 0.22 rad is the Magnetic Declination in New York
+
+  // Constraint Euler angle between -PI - PI
   if (eul.yaw_e > PI) {
     eul.yaw_e -= 2 * PI;
   }
 
-  
+  // Save command into a global veriable joint_pos_desired and constraint it into angle limit
   for (int i = 0; i < MOTOR_NUM; ++i) {
     joint_pos_desired[i] = jetson_comm.comd[i];
     if (joint_pos_desired[i] > joint_upper_limit[i])
@@ -350,6 +381,7 @@ void loop() {
       joint_pos_desired[i] = joint_lower_limit[i];
   }
   
+  // Control motors
   for (int i = 0; i < MOTOR_NUM / 2; ++i){
       Angle_Control_Loop(i, joint_pos_desired[i]);
       int j = i + MOTOR_NUM / 2;

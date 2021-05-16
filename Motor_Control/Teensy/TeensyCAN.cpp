@@ -1,5 +1,7 @@
 #include "Teensy.h"
 #include <math.h>
+
+// Function for doing matrix vector multiply
 void Matrix_Vector_Multiply(const float a[3][3], const float b[3], float out[3])
 {
   for(int x = 0; x < 3; x++)
@@ -8,6 +10,7 @@ void Matrix_Vector_Multiply(const float a[3][3], const float b[3], float out[3])
   }
 }
 
+// Function for transfering quaternion to Euler angle
 EulerAngles ToEulerAngles(Quaternion q) {
     EulerAngles angles;
 
